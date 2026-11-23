@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Inventaris Perangkat</title>
+<style>
+  :root { --bg:#f5f6f8; --card:#fff; --text:#1d2330; --muted:#6b7280; --line:#e5e7eb; --accent:#2563eb; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background:var(--bg); color:var(--text); }
+  header { background:var(--accent); color:#fff; padding:12px 16px; display:flex; align-items:center; justify-content:space-between; gap:8px; position:sticky; top:0; z-index:5; }
+  header h1 { font-size:17px; margin:0; font-weight:600; }
+  header button { background:rgba(255,255,255,.18); color:#fff; border:0; border-radius:6px; padding:7px 12px; font-size:14px; cursor:pointer; margin-left:6px; }
+  main { max-width:720px; margin:0 auto; padding:14px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px; margin-bottom:14px; }
+  .code { font-size:13px; color:var(--muted); }
+  .title { font-size:20px; font-weight:650; margin:2px 0 8px; }
+  table.kv { width:100%; border-collapse:collapse; }
+  table.kv td { padding:7px 0; border-bottom:1px solid var(--line); vertical-align:top; font-size:14.5px; }
+  table.kv td:first-child { color:var(--muted); width:38%; padding-right:10px; }
+  table.kv tr:last-child td { border-bottom:0; }
+  .badge { display:inline-block; padding:2px 10px; border-radius:999px; font-size:13px; font-weight:600; }
+  .b-baik { background:#dcfce7; color:#166534; } .b-ringan { background:#fef3c7; color:#92400e; }
+  .b-berat { background:#fee2e2; color:#991b1b; } .b-perbaikan { background:#dbeafe; color:#1e40af; }
+  .b-lain { background:#eef0f3; color:#374151; }
+  input, select, textarea { width:100%; padding:9px 10px; font-size:15px; border:1px solid #cfd4dc; border-radius:7px; background:#fff; font-family:inherit; }
+  textarea { min-height:70px; resize:vertical; }
+  label { display:block; font-size:13px; color:var(--muted); margin:10px 0 4px; }
+  .btn { background:var(--accent); color:#fff; border:0; border-radius:8px; padding:10px 16px; font-size:15px; cursor:pointer; }
+  .btn.ghost { background:#e8ecf3; color:#1d2330; }
+  .btn:disabled { opacity:.6; }
+  .actions { display:flex; gap:8px; margin-top:14px; flex-wrap:wrap; }
+  .row { padding:10px 4px; border-bottom:1px solid var(--line); cursor:pointer; display:flex; justify-content:space-between; gap:10px; align-items:center; }
+  .row:last-child { border-bottom:0; }
+  .row .sub { font-size:13px; color:var(--muted); }
+  .filters { display:flex; gap:8px; margin-bottom:10px; }
+  .hist { font-size:13.5px; padding:8px 0; border-bottom:1px solid var(--line); }
+  .hist:last-child { border-bottom:0; }
+  .muted { color:var(--muted); }
+  .err { background:#fee2e2; color:#991b1b; padding:9px 12px; border-radius:8px; margin-bottom:10px; font-size:14px; }
+  .ok { background:#dcfce7; color:#166534; padding:9px 12px; border-radius:8px; margin-bottom:10px; font-size:14px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Inventaris Perangkat</h1>
+  <div>
+    <button id="btnList">Daftar</button>
+    <button id="btnAdmin">Admin</button>
+  </div>
+</header>
+<main id="app">Memuat…</main>
+
+<script>
+  /* ============ KONFIGURASI: tempel URL /exec dari deploy Apps Script ============ */
+  const API_URL = 'https://script.google.com/macros/s/AKfycbztbX36NvHQ8cvQZi0PgvsviwsaYbQuYAYyNs2Z2nEn1llQ_TcWlnT83G-HOviBzbCv/exec';
+  /* ================================================================================ */
+
+  const INITIAL_ID = (new URLSearchParams(location.search).get('id') || '').trim().slice(0, 100);
+
+  const LABEL = {
+    kode_inventaris:'Kode inventaris', jenis:'Jenis', merek:'Merek', model:'Model', no_seri:'No. seri',
+    tgl_beli:'Tanggal beli', garansi_sampai:'Garansi sampai', lokasi:'Lokasi', penanggung_jawab:'Penanggung jawab',
+    kondisi:'Kondisi', status:'Status', spesifikasi:'Spesifikasi', foto_url:'Foto', catatan:'Catatan',
+    diperbarui_pada:'Diperbarui pada', diperbarui_oleh:'Diperbarui oleh'
+  };
+  const SHOW = ['jenis','merek','model','no_seri','lokasi','penanggung_jawab','kondisi','status','tgl_beli','garansi_sampai','spesifikasi','foto_url','catatan','diperbarui_pada','diperbarui_oleh'];
+
+  let PIN = null, PENGUBAH = '', OPTIONS = null, ALL = null;
+
+  const $ = function (id) { return document.getElementById(id); };
+  const esc = function (s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c];
+    });
+  };
+
+  /* ---------- Komunikasi dengan API Apps Script ---------- */
+  async function callApi(req) {
+    if (!/^https:\/\/script\.google\.com\/.+\/exec$/.test(API_URL)) {
+      throw new Error('API_URL di index.html belum diisi dengan URL /exec dari Apps Script.');
+    }
+    let res;
+    try {
+      if (req.body) {
+        // text/plain = "simple request": tidak memicu preflight CORS (Apps Script tidak menanganinya)
+        res = await fetch(API_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+          body: JSON.stringify(req.body)
+        });
+      } else {
+        res = await fetch(API_URL + '?' + new URLSearchParams(req.params).toString());
+      }
+    } catch (e) {
+      throw new Error('Tidak dapat menghubungi server. Periksa koneksi internet atau pengaturan deploy.');
+    }
+    let out;
+    try { out = await res.json(); } catch (e) { throw new Error('Respons server tidak valid.'); }
+    if (!out.ok) throw new Error(out.error || 'Terjadi kesalahan di server.');
+    return out.data;
+  }
+  function run(fn) {
+    const a = Array.prototype.slice.call(arguments, 1);
+    switch (fn) {
+      case 'getDevice':   return callApi({ params: { action: 'device', id: a[0] } });
+      case 'listDevices': return callApi({ params: { action: 'list' } });
+      case 'getOptions':  return callApi({ params: { action: 'options' } });
+      case 'verifyPin':   return callApi({ body: { action: 'verifyPin', pin: a[0] } });
+      case 'saveDevice':  return callApi({ body: { action: 'save', pin: a[0], payload: a[1] } });
+    }
+    return Promise.reject(new Error('Fungsi tidak dikenal: ' + fn));
+  }
+
+  /* ---------- Tampilan ---------- */
+  function badge(kondisi) {
+    const k = String(kondisi || '').toLowerCase();
+    let c = 'b-lain';
+    if (k === 'baik') c = 'b-baik';
+    else if (k === 'rusak ringan') c = 'b-ringan';
+    else if (k === 'rusak berat') c = 'b-berat';
+    else if (k === 'diperbaiki') c = 'b-perbaikan';
+    return '<span class="badge ' + c + '">' + esc(kondisi || '-') + '</span>';
+  }
+  function setApp(html) { $('app').innerHTML = html; window.scrollTo(0, 0); }
+  function updateAdminBtn() { $('btnAdmin').textContent = PIN ? 'Admin ✓' : 'Admin'; }
+
+  /* ---------- Detail ---------- */
+  async function showDetail(id, msg) {
+    setApp('<div class="card muted">Memuat…</div>');
+    try {
+      const res = await run('getDevice', id);
+      if (!res) {
+        setApp('<div class="card"><div class="title">Perangkat tidak ditemukan</div><p class="muted">Kode: ' + esc(id) +
+          '</p><div class="actions"><button class="btn" data-act="list">Lihat daftar</button>' +
+          (PIN ? '<button class="btn ghost" data-act="new" data-id="' + esc(id) + '">Tambah perangkat ini</button>' : '') + '</div></div>');
+        return;
+      }
+      const d = res.data;
+      let rows = '';
+      SHOW.forEach(function (f) {
+        const v = d[f];
+        if (!v && f !== 'kondisi') return;
+        let cell;
+        if (f === 'kondisi') cell = badge(v);
+        else if (f === 'foto_url' && /^https?:\/\//i.test(v)) cell = '<a href="' + esc(v) + '" target="_blank" rel="noopener">Buka foto</a>';
+        else cell = esc(v).replace(/\n/g, '<br>');
+        rows += '<tr><td>' + LABEL[f] + '</td><td>' + cell + '</td></tr>';
+      });
+      let hist = res.riwayat.length ? '' : '<div class="muted">Belum ada riwayat.</div>';
+      res.riwayat.forEach(function (h) {
+        const ch = h.lama || h.baru ? ' — <b>' + esc(h.field) + '</b>: ' + esc(h.lama || '(kosong)') + ' → ' + esc(h.baru || '(kosong)') : ' — ' + esc(h.field);
+        hist += '<div class="hist"><span class="muted">' + esc(h.waktu) + ' · ' + esc(h.oleh) + '</span>' + ch +
+          (h.catatan ? '<div class="muted">' + esc(h.catatan) + '</div>' : '') + '</div>';
+      });
+      setApp(
+        (msg ? '<div class="ok">' + esc(msg) + '</div>' : '') +
+        '<div class="card"><div class="code">' + esc(d.kode_inventaris) + '</div>' +
+        '<div class="title">' + esc([d.jenis, d.merek, d.model].filter(Boolean).join(' ') || d.kode_inventaris) + '</div>' +
+        '<table class="kv">' + rows + '</table>' +
+        '<div class="actions"><button class="btn" data-act="edit" data-id="' + esc(d.kode_inventaris) + '">' +
+        (PIN ? 'Edit data' : 'Masuk admin untuk edit') + '</button></div></div>' +
+        '<div class="card"><b>Riwayat perubahan</b><div style="margin-top:6px">' + hist + '</div></div>'
+      );
+    } catch (e) {
+      setApp('<div class="err">' + esc(e.message) + '</div>');
+    }
+  }
+
+  /* ---------- Daftar ---------- */
+  async function showList() {
+    setApp('<div class="card muted">Memuat daftar…</div>');
+    try {
+      if (!ALL) ALL = await run('listDevices');
+      setApp(
+        '<div class="filters"><input id="q" placeholder="Cari kode, jenis, merek, lokasi…">' +
+        '<select id="fk" style="max-width:140px"><option value="">Semua kondisi</option><option>Baik</option><option>Rusak Ringan</option><option>Rusak Berat</option><option>Diperbaiki</option></select></div>' +
+        (PIN ? '<div class="actions" style="margin:0 0 10px"><button class="btn" data-act="new">+ Tambah perangkat</button></div>' : '') +
+        '<div class="card" id="listbox"></div>'
+      );
+      const draw = function () {
+        const q = $('q').value.toLowerCase().trim();
+        const fk = $('fk').value;
+        const hit = ALL.filter(function (d) {
+          if (fk && d.kondisi !== fk) return false;
+          return !q || Object.keys(d).some(function (k) { return String(d[k]).toLowerCase().indexOf(q) >= 0; });
+        });
+        $('listbox').innerHTML = hit.length ? hit.slice(0, 300).map(function (d) {
+          return '<div class="row" data-id="' + esc(d.kode_inventaris) + '"><div><div><b>' + esc(d.kode_inventaris) + '</b> · ' +
+            esc([d.jenis, d.merek, d.model].filter(Boolean).join(' ')) + '</div><div class="sub">' + esc(d.lokasi || '-') + ' · ' + esc(d.status || '-') +
+            '</div></div>' + badge(d.kondisi) + '</div>';
+        }).join('') + (hit.length > 300 ? '<div class="muted" style="padding:8px">Menampilkan 300 pertama, persempit pencarian.</div>' : '')
+          : '<div class="muted">Tidak ada hasil.</div>';
+      };
+      $('q').addEventListener('input', draw);
+      $('fk').addEventListener('change', draw);
+      draw();
+    } catch (e) {
+      setApp('<div class="err">' + esc(e.message) + '</div>');
+    }
+  }
+
+  /* ---------- Login admin ---------- */
+  function showLogin(next) {
+    setApp('<div class="card"><div class="title">Masuk admin</div><label>PIN</label>' +
+      '<input id="pin" type="password" inputmode="numeric" autocomplete="off">' +
+      '<div id="lerr"></div><div class="actions"><button class="btn" id="go">Masuk</button><button class="btn ghost" data-act="list">Batal</button></div></div>');
+    const submit = async function () {
+      $('go').disabled = true;
+      try {
+        const p = $('pin').value;
+        await run('verifyPin', p);
+        PIN = p; updateAdminBtn();
+        next();
+      } catch (e) {
+        $('lerr').innerHTML = '<div class="err" style="margin-top:10px">' + esc(e.message) + '</div>';
+        $('go').disabled = false;
+      }
+    };
+    $('go').addEventListener('click', submit);
+    $('pin').addEventListener('keydown', function (e) { if (e.key === 'Enter') submit(); });
+    $('pin').focus();
+  }
+
+  /* ---------- Form tambah / edit ---------- */
+  async function showForm(id, isNew) {
+    if (!PIN) { showLogin(function () { showForm(id, isNew); }); return; }
+    setApp('<div class="card muted">Memuat form…</div>');
+    try {
+      if (!OPTIONS) OPTIONS = await run('getOptions');
+      let d = {};
+      if (!isNew) {
+        const res = await run('getDevice', id);
+        if (!res) { setApp('<div class="err">Perangkat tidak ditemukan.</div>'); return; }
+        d = res.data;
+      } else if (id) { d.kode_inventaris = id; }
+
+      const opt = function (list, cur) {
+        const l = list.slice();
+        if (cur && l.indexOf(cur) < 0) l.push(cur);
+        return '<option value=""></option>' + l.map(function (x) { return '<option' + (x === cur ? ' selected' : '') + '>' + esc(x) + '</option>'; }).join('');
+      };
+      const dl = function (name, list) { return '<datalist id="' + name + '">' + list.map(function (x) { return '<option value="' + esc(x) + '">'; }).join('') + '</datalist>'; };
+      const inp = function (f, type) {
+        return '<label>' + LABEL[f] + '</label><input data-f="' + f + '" type="' + (type || 'text') + '" value="' + esc(d[f] || '') + '">';
+      };
+
+      setApp(
+        '<div class="card"><div class="title">' + (isNew ? 'Tambah perangkat' : 'Edit ' + esc(d.kode_inventaris)) + '</div><div id="ferr"></div>' +
+        '<label>Kode inventaris</label><input data-f="kode_inventaris" value="' + esc(d.kode_inventaris || '') + '"' + (isNew ? '' : ' disabled') + '>' +
+        '<label>Jenis</label><input data-f="jenis" list="dl-jenis" value="' + esc(d.jenis || '') + '">' + dl('dl-jenis', OPTIONS.jenis) +
+        inp('merek') + inp('model') + inp('no_seri') + inp('tgl_beli', 'date') + inp('garansi_sampai', 'date') +
+        '<label>Lokasi</label><input data-f="lokasi" list="dl-lokasi" value="' + esc(d.lokasi || '') + '">' + dl('dl-lokasi', OPTIONS.lokasi) +
+        inp('penanggung_jawab') +
+        '<label>Kondisi</label><select data-f="kondisi">' + opt(OPTIONS.kondisi, d.kondisi) + '</select>' +
+        '<label>Status</label><select data-f="status">' + opt(OPTIONS.status, d.status) + '</select>' +
+        '<label>Spesifikasi</label><textarea data-f="spesifikasi">' + esc(d.spesifikasi || '') + '</textarea>' +
+        inp('foto_url', 'url') +
+        '<label>Catatan</label><textarea data-f="catatan">' + esc(d.catatan || '') + '</textarea>' +
+        '<hr style="border:0;border-top:1px solid var(--line);margin:16px 0 4px">' +
+        '<label>Nama Anda (pengubah) *</label><input id="pengubah" value="' + esc(PENGUBAH) + '">' +
+        '<label>Alasan perubahan (opsional)</label><input id="alasan" placeholder="mis. diservis, dipindah ke ruang B">' +
+        '<div class="actions"><button class="btn" id="save">Simpan</button><button class="btn ghost" id="cancel">Batal</button></div></div>'
+      );
+
+      $('cancel').addEventListener('click', function () { isNew ? showList() : showDetail(id); });
+      $('save').addEventListener('click', async function () {
+        const data = {};
+        document.querySelectorAll('[data-f]').forEach(function (el) { data[el.dataset.f] = el.value; });
+        if (!isNew) data.kode_inventaris = d.kode_inventaris;
+        PENGUBAH = $('pengubah').value.trim();
+        $('save').disabled = true;
+        try {
+          const r = await run('saveDevice', PIN, { data: data, isNew: !!isNew, pengubah: PENGUBAH, alasan: $('alasan').value });
+          ALL = null;
+          showDetail(data.kode_inventaris, r.changed ? 'Tersimpan (' + r.changed + ' perubahan dicatat).' : 'Tidak ada perubahan.');
+        } catch (e) {
+          if (/PIN/.test(e.message)) { PIN = null; updateAdminBtn(); }
+          $('ferr').innerHTML = '<div class="err">' + esc(e.message) + '</div>';
+          $('save').disabled = false;
+        }
+      });
+    } catch (e) {
+      setApp('<div class="err">' + esc(e.message) + '</div>');
+    }
+  }
+
+  /* ---------- Event ---------- */
+  $('app').addEventListener('click', function (e) {
+    const act = e.target.closest('[data-act]');
+    if (act) {
+      const a = act.dataset.act, id = act.dataset.id;
+      if (a === 'list') showList();
+      else if (a === 'edit') showForm(id, false);
+      else if (a === 'new') showForm(id || '', true);
+      return;
+    }
+    const row = e.target.closest('.row[data-id]');
+    if (row) showDetail(row.dataset.id);
+  });
+  $('btnList').addEventListener('click', showList);
+  $('btnAdmin').addEventListener('click', function () {
+    if (PIN) { PIN = null; updateAdminBtn(); setApp('<div class="ok">Keluar dari mode admin.</div>'); }
+    else showLogin(showList);
+  });
+
+  if (INITIAL_ID) showDetail(INITIAL_ID); else showList();
+</script>
+</body>
+</html>
